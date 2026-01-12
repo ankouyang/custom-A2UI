@@ -14,11 +14,16 @@ import DynamicComponent from "../DynamicComponent.vue";
 const props = defineProps<{
   surfaceId: Types.SurfaceID;
   component: Types.ButtonNode;
+  components?: Map<string, Types.AnyComponentNode>;
 }>();
 
 const emit = defineEmits(["action"]);
 
 const action = computed(() => props.component.properties.action);
+
+const childComponent = computed(() => {
+  return props.component.properties.child || null;
+});
 
 function handleClick() {
   if (action.value) {
@@ -37,9 +42,10 @@ function handleClick() {
     @click="handleClick"
   >
     <DynamicComponent
-      v-if="component.properties.child"
+      v-if="childComponent"
       :surface-id="surfaceId"
-      :component="component.properties.child"
+      :component="childComponent"
+      :components="components"
       @action="(action: any, context: any) => emit('action', action, context)"
     />
   </button>

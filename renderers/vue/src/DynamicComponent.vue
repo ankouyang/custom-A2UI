@@ -18,6 +18,7 @@ import Text from "./components/Text.vue";
 const props = defineProps<{
   surfaceId: Types.SurfaceID;
   component: Types.AnyComponentNode;
+  components?: Map<string, Types.AnyComponentNode>;
 }>();
 
 const emit = defineEmits(["action"]);
@@ -61,6 +62,7 @@ const dynamicComponent = computed(() => {
     :is="dynamicComponent"
     :surface-id="surfaceId"
     :component="component"
+    :components="components"
     @action="(action: any, context: any) => emit('action', action, context)"
   />
   <div v-else class="a2ui-unknown">Unknown component: {{ component.type }}</div>

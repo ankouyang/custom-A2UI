@@ -43,6 +43,7 @@ provide("a2ui-data-model", props.dataModel);
       v-if="rootComponent"
       :surface-id="surfaceId"
       :component="rootComponent"
+      :components="components"
       @action="(action: any, context: any) => emit('action', action, context)"
     />
     <div v-else class="a2ui-empty">No content to display</div>
