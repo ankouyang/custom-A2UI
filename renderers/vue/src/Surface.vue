@@ -7,7 +7,7 @@ CONDITIONS OF ANY KIND, either express or implied. See the License for the
 specific language governing permissions and limitations under the License. */
 
 <script setup lang="ts">
-import { ref, watch, provide } from "vue";
+import { watch, provide, computed } from "vue";
 import type { Types } from "@a2ui/lit/0.8";
 import DynamicComponent from "./DynamicComponent.vue";
 
@@ -20,17 +20,45 @@ const props = defineProps<{
 
 const emit = defineEmits(["action"]);
 
-const rootComponent = ref<Types.AnyComponentNode | null>(null);
+// 使用 computed 来确保响应式更新
+const rootComponent = computed(() => {
+  console.log("Surface.vue: Computing rootComponent:", {
+    hasComponents: !!props.components,
+    componentsSize: props.components?.size || 0,
+    rootId: props.rootId,
+    componentsKeys: props.components ? Array.from(props.components.keys()) : [],
+  });
+  
+  if (props.components && props.rootId) {
+    const found = props.components.get(props.rootId);
+    console.log("Surface.vue: Looking for root component:", {
+      rootId: props.rootId,
+      found: !!found,
+      component: found,
+    });
+    return found || null;
+  } else {
+    console.warn("Surface.vue: Missing components or rootId:", {
+      hasComponents: !!props.components,
+      rootId: props.rootId,
+    });
+    return null;
+  }
+});
 
-// 监听 props 变化，更新根组件
+// 监听 props 变化以便调试
 watch(
   () => [props.components, props.rootId],
   () => {
-    if (props.components && props.rootId) {
-      rootComponent.value = props.components.get(props.rootId) || null;
-    }
+    console.log("Surface.vue: Props changed:", {
+      hasComponents: !!props.components,
+      componentsSize: props.components?.size || 0,
+      rootId: props.rootId,
+      componentsKeys: props.components ? Array.from(props.components.keys()) : [],
+      rootComponentValue: rootComponent.value,
+    });
   },
-  { immediate: true }
+  { immediate: true, deep: true }
 );
 
 // 提供 surface 级别的数据模型
@@ -43,10 +71,12 @@ provide("a2ui-data-model", props.dataModel);
       v-if="rootComponent"
       :surface-id="surfaceId"
       :component="rootComponent"
-      :components="components"
+      :components="props.components"
       @action="(action: any, context: any) => emit('action', action, context)"
     />
-    <div v-else class="a2ui-empty">No content to display</div>
+    <div v-else class="a2ui-empty">
+      No content to display
+    </div>
   </div>
 </template>
 

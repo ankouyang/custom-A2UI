@@ -14,6 +14,8 @@ import { componentRegistry } from "./component-registry";
 // 导入标准组件
 import Button from "./components/Button.vue";
 import Text from "./components/Text.vue";
+import Column from "./components/Column.vue";
+import Row from "./components/Row.vue";
 
 const props = defineProps<{
   surfaceId: Types.SurfaceID;
@@ -27,14 +29,52 @@ const emit = defineEmits(["action"]);
 const componentMap: Record<string, any> = {
   Button: markRaw(Button),
   Text: markRaw(Text),
+  Column: markRaw(Column),
+  Row: markRaw(Row),
   // TODO: 添加其他标准组件
   // Card: markRaw(Card),
   // TextField: markRaw(TextField),
   // ...
 };
 
+// 提取组件类型的 computed
+const componentType = computed(() => {
+  const component = props.component as any;
+
+  // 检查是否是已转换的格式（有 type 字段）
+  if (component.type && typeof component.type === "string") {
+    return component.type;
+  }
+  // 检查是否是原始格式（有 component 字段，如 { component: { Column: {...} } }）
+  else if (component.component && typeof component.component === "object") {
+    const componentObj = component.component;
+    const keys = Object.keys(componentObj);
+    return keys.length > 0 ? keys[0] : null;
+  }
+  // 检查是否是对象格式的 type（如 { type: { Column: {...} } }）
+  else if (component.type && typeof component.type === "object") {
+    const keys = Object.keys(component.type);
+    return keys.length > 0 ? keys[0] : null;
+  }
+
+  return null;
+});
+
 const dynamicComponent = computed(() => {
-  const type = props.component.type;
+  const type = componentType.value;
+  const component = props.component as any;
+
+  console.log(
+    "DynamicComponent: component:",
+    component,
+    "componentType:",
+    type
+  );
+
+  if (!type) {
+    console.warn("Could not determine component type:", component);
+    return null;
+  }
 
   // 1. 检查标准组件
   if (componentMap[type]) {
@@ -44,10 +84,12 @@ const dynamicComponent = computed(() => {
   // 2. 检查自定义组件注册表
   if (type === "Custom") {
     const customProps = props.component.properties as any;
-    const customType = customProps.typeName;
-    const customComponent = componentRegistry.get(customType);
-    if (customComponent) {
-      return markRaw(customComponent);
+    const customType = customProps?.typeName;
+    if (customType) {
+      const customComponent = componentRegistry.get(customType);
+      if (customComponent) {
+        return markRaw(customComponent);
+      }
     }
   }
 
@@ -65,7 +107,9 @@ const dynamicComponent = computed(() => {
     :components="components"
     @action="(action: any, context: any) => emit('action', action, context)"
   />
-  <div v-else class="a2ui-unknown">Unknown component: {{ component.type }}</div>
+  <div v-else class="a2ui-unknown">
+    Unknown component: {{ componentType || "N/A" }}
+  </div>
 </template>
 
 <style scoped>

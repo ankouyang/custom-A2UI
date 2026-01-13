@@ -156,34 +156,83 @@ class RestaurantAgent:
                 f"for session {session_id} ---"
             )
 
+            # On retry attempts (attempt > 1), use a fresh session to avoid conversation history issues
+            # that can cause "function call turn order" errors with Gemini API
+            if attempt > 1:
+                logger.warning(
+                    f"--- RestaurantAgent.stream: Using new session for retry attempt {attempt} "
+                    f"to avoid conversation history issues ---"
+                )
+                session = await self._runner.session_service.create_session(
+                    app_name=self._agent.name,
+                    user_id=self._user_id,
+                    state={"base_url": self.base_url},
+                    session_id=f"{session_id}_retry_{attempt}",
+                )
+
             current_message = types.Content(
                 role="user", parts=[types.Part.from_text(text=current_query_text)]
             )
             final_response_content = None
 
-            async for event in self._runner.run_async(
-                user_id=self._user_id,
-                session_id=session.id,
-                new_message=current_message,
-            ):
-                logger.info(f"Event from runner: {event}")
-                if event.is_final_response():
-                    if (
-                        event.content
-                        and event.content.parts
-                        and event.content.parts[0].text
-                    ):
-                        final_response_content = "\n".join(
-                            [p.text for p in event.content.parts if p.text]
+            try:
+                async for event in self._runner.run_async(
+                    user_id=self._user_id,
+                    session_id=session.id,
+                    new_message=current_message,
+                ):
+                    logger.info(f"Event from runner: {event}")
+                    if event.is_final_response():
+                        if (
+                            event.content
+                            and event.content.parts
+                            and event.content.parts[0].text
+                        ):
+                            final_response_content = "\n".join(
+                                [p.text for p in event.content.parts if p.text]
+                            )
+                        break  # Got the final response, stop consuming events
+                    else:
+                        logger.info(f"Intermediate event: {event}")
+                        # Yield intermediate updates on every attempt
+                        yield {
+                            "is_task_complete": False,
+                            "updates": self.get_processing_message(),
+                        }
+            except Exception as e:
+                error_str = str(e)
+                # Check if this is the function call turn order error
+                if "function call turn comes immediately after" in error_str or "INVALID_ARGUMENT" in error_str:
+                    logger.error(
+                        f"--- RestaurantAgent.stream: Function call turn order error detected (Attempt {attempt}). "
+                        f"This may be due to conversation history issues. Error: {error_str} ---"
+                    )
+                    # On retry, create a new session to avoid history issues
+                    if attempt <= max_retries:
+                        logger.warning(
+                            f"--- RestaurantAgent.stream: Creating new session for retry to avoid history issues ---"
                         )
-                    break  # Got the final response, stop consuming events
+                        # Create a new session for the retry
+                        session = await self._runner.session_service.create_session(
+                            app_name=self._agent.name,
+                            user_id=self._user_id,
+                            state={"base_url": self.base_url},
+                            session_id=f"{session_id}_retry_{attempt}",
+                        )
+                        current_query_text = (
+                            f"Please retry the original request: '{query}'"
+                        )
+                        continue  # Go to next retry with new session
+                    else:
+                        # Max retries exhausted
+                        final_response_content = (
+                            "I'm sorry, I encountered an error processing your request. "
+                            "Please try again with a new conversation."
+                        )
+                        break
                 else:
-                    logger.info(f"Intermediate event: {event}")
-                    # Yield intermediate updates on every attempt
-                    yield {
-                        "is_task_complete": False,
-                        "updates": self.get_processing_message(),
-                    }
+                    # Re-raise other exceptions
+                    raise
 
             if final_response_content is None:
                 logger.warning(
@@ -279,13 +328,14 @@ class RestaurantAgent:
                 logger.warning(
                     f"--- RestaurantAgent.stream: Retrying... ({attempt}/{max_retries + 1}) ---"
                 )
-                # Prepare the query for the retry
+                # Prepare the query for the retry - be very explicit about the original request
                 current_query_text = (
-                    f"Your previous response was invalid. {error_message} "
+                    f"ORIGINAL USER REQUEST: {query}\n\n"
+                    f"Your previous response was invalid. {error_message}\n\n"
                     "You MUST generate a valid response that strictly follows the A2UI JSON SCHEMA. "
                     "The response MUST be a JSON list of A2UI messages. "
                     "Ensure the response is split by '---a2ui_JSON---' and the JSON part is well-formed. "
-                    f"Please retry the original request: '{query}'"
+                    "Please respond to the ORIGINAL USER REQUEST above."
                 )
                 # Loop continues...
 

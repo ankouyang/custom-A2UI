@@ -10,7 +10,7 @@ specific language governing permissions and limitations under the License. */
 import { ref, onMounted } from "vue";
 import { A2UISurface, A2UI } from "@a2ui/vue";
 
-const surfaceId = "main";
+const surfaceId = "default"; // 注意：模型返回的 JSON 中使用的是 "default"
 const components = ref<Map<string, A2UI.Types.AnyComponentNode>>(new Map());
 const rootId = ref<string>("");
 const dataModel = ref<any>({});
@@ -20,15 +20,142 @@ const messages = ref<Array<{ role: "user" | "agent"; content: string }>>([]);
 // 创建消息处理器
 const processor = new A2UI.Data.A2uiMessageProcessor();
 
-// 监听处理器状态变化
-processor.onStateChange = (state) => {
-  const surface = state.surfaces.get(surfaceId);
+// 更新 Surface 状态的函数
+function updateSurfaceState() {
+  const surfaces = processor.getSurfaces();
+  const surface = surfaces.get(surfaceId);
   if (surface) {
-    components.value = surface.components;
-    rootId.value = surface.root || "";
-    dataModel.value = surface.dataModel;
+    // 创建新的 Map 实例以确保 Vue 响应式系统检测到变化
+    const newComponents = new Map(surface.components);
+    const newRootId = surface.rootComponentId || "";
+
+    // 对于 dataModel，如果是 Map，也需要创建新实例
+    let newDataModel = surface.dataModel;
+    if (surface.dataModel instanceof Map) {
+      newDataModel = new Map(surface.dataModel);
+    }
+
+    console.log("updateSurfaceState: Before update:", {
+      oldComponentsSize: components.value.size,
+      oldRootId: rootId.value,
+      newComponentsSize: newComponents.size,
+      newRootId: newRootId,
+      componentIds: Array.from(newComponents.keys()),
+      hasRootComponent: !!newComponents.get(newRootId),
+    });
+
+    // 更新值
+    components.value = newComponents;
+    rootId.value = newRootId;
+    dataModel.value = newDataModel;
+
+    console.log("updateSurfaceState: After update:", {
+      componentsSize: components.value.size,
+      rootId: rootId.value,
+      hasRootComponent: !!components.value.get(rootId.value),
+      rootComponentDetails: components.value.get(rootId.value),
+      dataModel: dataModel.value,
+      dataModelType:
+        dataModel.value instanceof Map ? "Map" : typeof dataModel.value,
+      dataModelKeys:
+        dataModel.value instanceof Map
+          ? Array.from(dataModel.value.keys())
+          : Object.keys(dataModel.value || {}),
+    });
+  } else {
+    console.warn(
+      `Surface '${surfaceId}' not found. Available surfaces:`,
+      Array.from(surfaces.keys())
+    );
+    // 清空状态
+    components.value = new Map();
+    rootId.value = "";
+    dataModel.value = {};
   }
-};
+}
+
+// 从 A2A Part 中提取 A2UI 消息
+function extractA2uiMessagesFromParts(
+  parts: any[]
+): A2UI.Types.ServerToClientMessage[] {
+  const messages: A2UI.Types.ServerToClientMessage[] = [];
+
+  console.log("extractA2uiMessagesFromParts: Processing parts:", parts);
+
+  for (const part of parts) {
+    console.log("extractA2uiMessagesFromParts: Processing part:", part);
+
+    // 检查是否是 DataPart 且包含 A2UI 数据
+    if (part.kind === "data" && part.data && typeof part.data === "object") {
+      console.log("extractA2uiMessagesFromParts: Found data part:", part.data);
+
+      // 检查 metadata 中是否有 A2UI MIME type
+      const isA2uiPart = part.metadata?.mimeType === "application/json+a2ui";
+      console.log(
+        "extractA2uiMessagesFromParts: isA2uiPart:",
+        isA2uiPart,
+        "metadata:",
+        part.metadata
+      );
+
+      if (
+        isA2uiPart ||
+        part.data.beginRendering ||
+        part.data.surfaceUpdate ||
+        part.data.dataModelUpdate ||
+        part.data.deleteSurface
+      ) {
+        console.log("extractA2uiMessagesFromParts: Part contains A2UI message");
+
+        // 直接提取 A2UI 消息
+        if (part.data.beginRendering) {
+          console.log(
+            "extractA2uiMessagesFromParts: Found beginRendering:",
+            part.data.beginRendering
+          );
+          messages.push({ beginRendering: part.data.beginRendering });
+        }
+        if (part.data.surfaceUpdate) {
+          console.log(
+            "extractA2uiMessagesFromParts: Found surfaceUpdate:",
+            part.data.surfaceUpdate
+          );
+          messages.push({ surfaceUpdate: part.data.surfaceUpdate });
+        }
+        if (part.data.dataModelUpdate) {
+          console.log(
+            "extractA2uiMessagesFromParts: Found dataModelUpdate:",
+            part.data.dataModelUpdate
+          );
+          messages.push({ dataModelUpdate: part.data.dataModelUpdate });
+        }
+        if (part.data.deleteSurface) {
+          console.log(
+            "extractA2uiMessagesFromParts: Found deleteSurface:",
+            part.data.deleteSurface
+          );
+          messages.push({ deleteSurface: part.data.deleteSurface });
+        }
+      } else {
+        console.log(
+          "extractA2uiMessagesFromParts: Part does not contain A2UI message"
+        );
+      }
+    } else {
+      console.log(
+        "extractA2uiMessagesFromParts: Part is not a data part or has no data:",
+        {
+          kind: part.kind,
+          hasData: !!part.data,
+          dataType: typeof part.data,
+        }
+      );
+    }
+  }
+
+  console.log("extractA2uiMessagesFromParts: Extracted messages:", messages);
+  return messages;
+}
 
 async function sendMessage() {
   if (!userInput.value.trim()) return;
@@ -45,33 +172,75 @@ async function sendMessage() {
       body: JSON.stringify({ message }),
     });
 
-    const reader = response.body?.getReader();
-    const decoder = new TextDecoder();
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
 
-    if (reader) {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
+    // 解析 JSON 响应（middleware 返回的是 parts 数组）
+    const parts = await response.json();
+    console.log("Received parts:", parts);
+    console.log("Parts type:", Array.isArray(parts) ? "array" : typeof parts);
+    console.log("Parts length:", Array.isArray(parts) ? parts.length : "N/A");
 
-        const chunk = decoder.decode(value);
-        const lines = chunk.split("\n").filter((line) => line.trim());
+    // 从 Parts 中提取 A2UI 消息
+    const a2uiMessages = extractA2uiMessagesFromParts(
+      Array.isArray(parts) ? parts : [parts]
+    );
+    console.log("Extracted A2UI messages:", a2uiMessages);
+    console.log("A2UI messages count:", a2uiMessages.length);
 
-        for (const line of lines) {
-          try {
-            const msg = JSON.parse(line);
-            processor.process(msg);
-          } catch (e) {
-            console.error("Failed to parse message:", e);
-          }
-        }
+    // 处理 A2UI 消息
+    if (a2uiMessages.length > 0) {
+      console.log("Processing A2UI messages...");
+      console.log(
+        "Message order:",
+        a2uiMessages.map((msg) => {
+          if (msg.beginRendering) return "beginRendering";
+          if (msg.surfaceUpdate) return "surfaceUpdate";
+          if (msg.dataModelUpdate) return "dataModelUpdate";
+          if (msg.deleteSurface) return "deleteSurface";
+          return "unknown";
+        })
+      );
+
+      processor.processMessages(a2uiMessages);
+      console.log("Messages processed. Getting surfaces...");
+      const surfaces = processor.getSurfaces();
+      console.log("All surfaces:", Array.from(surfaces.keys()));
+
+      // 手动更新 Surface 状态（因为 processor 没有 onStateChange 回调）
+      updateSurfaceState();
+
+      // 强制触发 Vue 响应式更新（使用 nextTick 确保在下一个渲染周期更新）
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      updateSurfaceState();
+    } else {
+      console.warn("No A2UI messages found in response");
+      console.warn("Parts that were checked:", parts);
+    }
+
+    // 处理文本消息（kind: "text"）用于聊天记录显示
+    // 注意：这些消息不应该影响 A2UI 渲染
+    for (const part of Array.isArray(parts) ? parts : [parts]) {
+      if (part.kind === "text" && part.text) {
+        messages.value.push({
+          role: "agent",
+          content: part.text,
+        });
       }
     }
   } catch (error) {
     console.error("Failed to send message:", error);
+    messages.value.push({
+      role: "agent",
+      content: `Error: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    });
   }
 }
 
-function handleAction(action: Types.Action, context: any) {
+function handleAction(action: A2UI.Types.Action, context: any) {
   console.log("Action triggered:", action, context);
 
   // 发送 action 到 agent
