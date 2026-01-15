@@ -1,171 +1,31 @@
-/* Copyright 2025 Google LLC Licensed under the Apache License, Version 2.0 (the
-"License"); you may not use this file except in compliance with the License. You
-may obtain a copy of the License at https://www.apache.org/licenses/LICENSE-2.0
-Unless required by applicable law or agreed to in writing, software distributed
-under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
-CONDITIONS OF ANY KIND, either express or implied. See the License for the
-specific language governing permissions and limitations under the License. */
+/* Copyright 2025 Google LLC Licensed under the Apache License, Version 2.0 */
 
 <script setup lang="ts">
-import { ref, onMounted } from "vue";
+import { ref, computed } from "vue";
 import { A2UISurface, A2UI } from "@a2ui/vue";
 
-const surfaceId = "default"; // 注意：模型返回的 JSON 中使用的是 "default"
-const components = ref<Map<string, A2UI.Types.AnyComponentNode>>(new Map());
-const rootId = ref<string>("");
-const dataModel = ref<any>({});
+// State
 const userInput = ref("");
-const messages = ref<Array<{ role: "user" | "agent"; content: string }>>([]);
+const chatMessages = ref<Array<{ role: "user" | "agent"; content: string }>>([]);
+const a2uiMessages = ref<A2UI.Types.ServerToClientMessage[]>([]);
+const loading = ref(false);
+const error = ref<string | null>(null);
 
-// 创建消息处理器
-const processor = new A2UI.Data.A2uiMessageProcessor();
+// Computed
+const hasMessages = computed(() => chatMessages.value.length > 0);
 
-// 更新 Surface 状态的函数
-function updateSurfaceState() {
-  const surfaces = processor.getSurfaces();
-  const surface = surfaces.get(surfaceId);
-  if (surface) {
-    // 创建新的 Map 实例以确保 Vue 响应式系统检测到变化
-    const newComponents = new Map(surface.components);
-    const newRootId = surface.rootComponentId || "";
+// 处理用户输入
+async function handleSubmit() {
+  if (!userInput.value.trim() || loading.value) return;
 
-    // 对于 dataModel，如果是 Map，也需要创建新实例
-    let newDataModel = surface.dataModel;
-    if (surface.dataModel instanceof Map) {
-      newDataModel = new Map(surface.dataModel);
-    }
-
-    console.log("updateSurfaceState: Before update:", {
-      oldComponentsSize: components.value.size,
-      oldRootId: rootId.value,
-      newComponentsSize: newComponents.size,
-      newRootId: newRootId,
-      componentIds: Array.from(newComponents.keys()),
-      hasRootComponent: !!newComponents.get(newRootId),
-    });
-
-    // 更新值
-    components.value = newComponents;
-    rootId.value = newRootId;
-    dataModel.value = newDataModel;
-
-    console.log("updateSurfaceState: After update:", {
-      componentsSize: components.value.size,
-      rootId: rootId.value,
-      hasRootComponent: !!components.value.get(rootId.value),
-      rootComponentDetails: components.value.get(rootId.value),
-      dataModel: dataModel.value,
-      dataModelType:
-        dataModel.value instanceof Map ? "Map" : typeof dataModel.value,
-      dataModelKeys:
-        dataModel.value instanceof Map
-          ? Array.from(dataModel.value.keys())
-          : Object.keys(dataModel.value || {}),
-    });
-  } else {
-    console.warn(
-      `Surface '${surfaceId}' not found. Available surfaces:`,
-      Array.from(surfaces.keys())
-    );
-    // 清空状态
-    components.value = new Map();
-    rootId.value = "";
-    dataModel.value = {};
-  }
-}
-
-// 从 A2A Part 中提取 A2UI 消息
-function extractA2uiMessagesFromParts(
-  parts: any[]
-): A2UI.Types.ServerToClientMessage[] {
-  const messages: A2UI.Types.ServerToClientMessage[] = [];
-
-  console.log("extractA2uiMessagesFromParts: Processing parts:", parts);
-
-  for (const part of parts) {
-    console.log("extractA2uiMessagesFromParts: Processing part:", part);
-
-    // 检查是否是 DataPart 且包含 A2UI 数据
-    if (part.kind === "data" && part.data && typeof part.data === "object") {
-      console.log("extractA2uiMessagesFromParts: Found data part:", part.data);
-
-      // 检查 metadata 中是否有 A2UI MIME type
-      const isA2uiPart = part.metadata?.mimeType === "application/json+a2ui";
-      console.log(
-        "extractA2uiMessagesFromParts: isA2uiPart:",
-        isA2uiPart,
-        "metadata:",
-        part.metadata
-      );
-
-      if (
-        isA2uiPart ||
-        part.data.beginRendering ||
-        part.data.surfaceUpdate ||
-        part.data.dataModelUpdate ||
-        part.data.deleteSurface
-      ) {
-        console.log("extractA2uiMessagesFromParts: Part contains A2UI message");
-
-        // 直接提取 A2UI 消息
-        if (part.data.beginRendering) {
-          console.log(
-            "extractA2uiMessagesFromParts: Found beginRendering:",
-            part.data.beginRendering
-          );
-          messages.push({ beginRendering: part.data.beginRendering });
-        }
-        if (part.data.surfaceUpdate) {
-          console.log(
-            "extractA2uiMessagesFromParts: Found surfaceUpdate:",
-            part.data.surfaceUpdate
-          );
-          messages.push({ surfaceUpdate: part.data.surfaceUpdate });
-        }
-        if (part.data.dataModelUpdate) {
-          console.log(
-            "extractA2uiMessagesFromParts: Found dataModelUpdate:",
-            part.data.dataModelUpdate
-          );
-          messages.push({ dataModelUpdate: part.data.dataModelUpdate });
-        }
-        if (part.data.deleteSurface) {
-          console.log(
-            "extractA2uiMessagesFromParts: Found deleteSurface:",
-            part.data.deleteSurface
-          );
-          messages.push({ deleteSurface: part.data.deleteSurface });
-        }
-      } else {
-        console.log(
-          "extractA2uiMessagesFromParts: Part does not contain A2UI message"
-        );
-      }
-    } else {
-      console.log(
-        "extractA2uiMessagesFromParts: Part is not a data part or has no data:",
-        {
-          kind: part.kind,
-          hasData: !!part.data,
-          dataType: typeof part.data,
-        }
-      );
-    }
-  }
-
-  console.log("extractA2uiMessagesFromParts: Extracted messages:", messages);
-  return messages;
-}
-
-async function sendMessage() {
-  if (!userInput.value.trim()) return;
-
-  const message = userInput.value;
-  messages.value.push({ role: "user", content: message });
+  const message = userInput.value.trim();
   userInput.value = "";
+  error.value = null;
+
+  chatMessages.value.push({ role: "user", content: message });
+  loading.value = true;
 
   try {
-    // 调用 A2A agent
     const response = await fetch("/a2a/invoke", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -173,211 +33,321 @@ async function sendMessage() {
     });
 
     if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`);
+      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
     }
 
-    // 解析 JSON 响应（middleware 返回的是 parts 数组）
     const parts = await response.json();
-    console.log("Received parts:", parts);
-    console.log("Parts type:", Array.isArray(parts) ? "array" : typeof parts);
-    console.log("Parts length:", Array.isArray(parts) ? parts.length : "N/A");
+    console.log("[App] Received response:", parts);
 
-    // 从 Parts 中提取 A2UI 消息
-    const a2uiMessages = extractA2uiMessagesFromParts(
-      Array.isArray(parts) ? parts : [parts]
-    );
-    console.log("Extracted A2UI messages:", a2uiMessages);
-    console.log("A2UI messages count:", a2uiMessages.length);
-
-    // 处理 A2UI 消息
-    if (a2uiMessages.length > 0) {
-      console.log("Processing A2UI messages...");
-      console.log(
-        "Message order:",
-        a2uiMessages.map((msg) => {
-          if (msg.beginRendering) return "beginRendering";
-          if (msg.surfaceUpdate) return "surfaceUpdate";
-          if (msg.dataModelUpdate) return "dataModelUpdate";
-          if (msg.deleteSurface) return "deleteSurface";
-          return "unknown";
-        })
-      );
-
-      processor.processMessages(a2uiMessages);
-      console.log("Messages processed. Getting surfaces...");
-      const surfaces = processor.getSurfaces();
-      console.log("All surfaces:", Array.from(surfaces.keys()));
-
-      // 手动更新 Surface 状态（因为 processor 没有 onStateChange 回调）
-      updateSurfaceState();
-
-      // 强制触发 Vue 响应式更新（使用 nextTick 确保在下一个渲染周期更新）
-      await new Promise((resolve) => setTimeout(resolve, 0));
-      updateSurfaceState();
-    } else {
-      console.warn("No A2UI messages found in response");
-      console.warn("Parts that were checked:", parts);
+    // 提取 A2UI 消息
+    const newA2UIMessages = extractA2UIMessages(parts);
+    if (newA2UIMessages.length > 0) {
+      a2uiMessages.value = [...a2uiMessages.value, ...newA2UIMessages];
     }
 
-    // 处理文本消息（kind: "text"）用于聊天记录显示
-    // 注意：这些消息不应该影响 A2UI 渲染
-    for (const part of Array.isArray(parts) ? parts : [parts]) {
-      if (part.kind === "text" && part.text) {
-        messages.value.push({
-          role: "agent",
-          content: part.text,
-        });
-      }
+    // 提取文本消息
+    const textParts = parts.filter((p: any) => p.kind === "text");
+    if (textParts.length > 0) {
+      const agentText = textParts.map((p: any) => p.text).join("\n");
+      chatMessages.value.push({ role: "agent", content: agentText });
     }
-  } catch (error) {
-    console.error("Failed to send message:", error);
-    messages.value.push({
+  } catch (err: any) {
+    console.error("[App] Error:", err);
+    error.value = err.message || "Failed to send message";
+    chatMessages.value.push({
       role: "agent",
-      content: `Error: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
+      content: `Error: ${error.value}`,
     });
+  } finally {
+    loading.value = false;
   }
 }
 
+// 从 parts 中提取 A2UI 消息
+function extractA2UIMessages(
+  parts: any[]
+): A2UI.Types.ServerToClientMessage[] {
+  const messages: A2UI.Types.ServerToClientMessage[] = [];
+
+  for (const part of parts) {
+    if (part.kind === "data" && part.data) {
+      const isA2UI =
+        part.metadata?.mimeType === "application/json+a2ui" ||
+        part.data.beginRendering ||
+        part.data.surfaceUpdate ||
+        part.data.dataModelUpdate;
+
+      if (isA2UI) {
+        if (part.data.beginRendering) {
+          messages.push({ beginRendering: part.data.beginRendering });
+        }
+        if (part.data.surfaceUpdate) {
+          messages.push({ surfaceUpdate: part.data.surfaceUpdate });
+        }
+        if (part.data.dataModelUpdate) {
+          messages.push({ dataModelUpdate: part.data.dataModelUpdate });
+        }
+      }
+    }
+  }
+
+  return messages;
+}
+
+// 处理 A2UI 用户操作
 function handleAction(action: A2UI.Types.Action, context: any) {
-  console.log("Action triggered:", action, context);
+  console.log("[App] User action:", action, context);
+  chatMessages.value.push({ role: "user", content: `Action: ${action.name}` });
+  // TODO: 将操作发送回 Agent
+}
 
-  // 发送 action 到 agent
-  messages.value.push({
-    role: "user",
-    content: `Action: ${action.name}`,
-  });
-
-  // TODO: 实现 action 处理逻辑
+// 清空聊天
+function clearChat() {
+  chatMessages.value = [];
+  a2uiMessages.value = [];
+  error.value = null;
 }
 </script>
 
 <template>
   <div class="app">
-    <header>
-      <h1>A2UI Vue Demo - Restaurant Finder</h1>
+    <header class="header">
+      <h1>🤖 A2UI Vue Demo</h1>
+      <p class="subtitle">Powered by Web Components from @a2ui/lit</p>
+      <button v-if="hasMessages" @click="clearChat" class="clear-btn">
+        Clear Chat
+      </button>
     </header>
 
-    <main>
-      <div class="chat-container">
-        <div class="messages">
-          <div
-            v-for="(msg, idx) in messages"
-            :key="idx"
-            :class="['message', msg.role]"
-          >
-            <strong>{{ msg.role === "user" ? "You" : "Agent" }}:</strong>
-            {{ msg.content }}
-          </div>
-        </div>
+    <main class="main">
+      <!-- A2UI Surface (使用 Web Components 渲染) -->
+      <div class="surface-container">
+        <A2UISurface
+          v-model:messages="a2uiMessages"
+          surface-id="default"
+          @action="handleAction"
+        />
+      </div>
 
-        <div class="surface-container">
-          <A2UISurface
-            :surface-id="surfaceId"
-            :components="components"
-            :root-id="rootId"
-            :data-model="dataModel"
-            @action="handleAction"
-          />
-        </div>
-
-        <div class="input-container">
-          <input
-            v-model="userInput"
-            type="text"
-            placeholder="Try: 'Book a table for 2'"
-            @keyup.enter="sendMessage"
-          />
-          <button @click="sendMessage">Send</button>
+      <!-- 聊天历史 -->
+      <div v-if="hasMessages" class="chat-history">
+        <h3>Chat History</h3>
+        <div
+          v-for="(msg, idx) in chatMessages"
+          :key="idx"
+          :class="['message', msg.role]"
+        >
+          <strong>{{ msg.role === "user" ? "You" : "Agent" }}:</strong>
+          <span>{{ msg.content }}</span>
         </div>
       </div>
+
+      <!-- 错误提示 -->
+      <div v-if="error" class="error">⚠️ {{ error }}</div>
     </main>
+
+    <footer class="footer">
+      <form @submit.prevent="handleSubmit" class="input-form">
+        <input
+          v-model="userInput"
+          type="text"
+          placeholder="Type your message..."
+          :disabled="loading"
+          class="input"
+        />
+        <button
+          type="submit"
+          :disabled="loading || !userInput.trim()"
+          class="submit-btn"
+        >
+          {{ loading ? "Sending..." : "Send" }}
+        </button>
+      </form>
+      <p class="hint">
+        💡 This demo uses <code>&lt;a2ui-surface&gt;</code> Web Component
+        directly
+      </p>
+    </footer>
   </div>
 </template>
 
 <style scoped>
 .app {
-  max-width: 800px;
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  max-width: 1200px;
   margin: 0 auto;
-  padding: 20px;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
 }
 
-header {
+.header {
+  padding: 1.5rem;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
   text-align: center;
-  margin-bottom: 30px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  position: relative;
 }
 
-header h1 {
-  color: #1976d2;
-  font-size: 28px;
+.header h1 {
+  margin: 0;
+  font-size: 2rem;
 }
 
-.chat-container {
-  border: 1px solid #e0e0e0;
-  border-radius: 12px;
-  overflow: hidden;
+.subtitle {
+  margin: 0.5rem 0 0;
+  opacity: 0.9;
+  font-size: 0.9rem;
 }
 
-.messages {
-  min-height: 200px;
-  max-height: 300px;
+.clear-btn {
+  position: absolute;
+  top: 1.5rem;
+  right: 1.5rem;
+  padding: 0.5rem 1rem;
+  background: rgba(255, 255, 255, 0.2);
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  color: white;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.9rem;
+  transition: all 0.2s;
+}
+
+.clear-btn:hover {
+  background: rgba(255, 255, 255, 0.3);
+}
+
+.main {
+  flex: 1;
   overflow-y: auto;
-  padding: 16px;
+  padding: 1.5rem;
   background: #f5f5f5;
 }
 
-.message {
-  margin-bottom: 12px;
-  padding: 8px 12px;
-  border-radius: 8px;
+.surface-container {
   background: white;
+  border-radius: 12px;
+  padding: 1.5rem;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08);
+  margin-bottom: 1.5rem;
+  min-height: 300px;
+}
+
+.chat-history {
+  background: white;
+  border-radius: 12px;
+  padding: 1.5rem;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08);
+}
+
+.chat-history h3 {
+  margin: 0 0 1rem;
+  color: #333;
+  font-size: 1.1rem;
+}
+
+.message {
+  padding: 0.75rem 1rem;
+  margin-bottom: 0.75rem;
+  border-radius: 8px;
+  line-height: 1.5;
 }
 
 .message.user {
   background: #e3f2fd;
+  border-left: 3px solid #2196f3;
 }
 
 .message.agent {
-  background: #f1f8e9;
+  background: #f3e5f5;
+  border-left: 3px solid #9c27b0;
 }
 
-.surface-container {
-  min-height: 200px;
-  padding: 20px;
+.message strong {
+  display: block;
+  margin-bottom: 0.25rem;
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.error {
+  background: #ffebee;
+  color: #c62828;
+  padding: 1rem;
+  border-radius: 8px;
+  border-left: 3px solid #c62828;
+  margin-top: 1rem;
+}
+
+.footer {
+  padding: 1.5rem;
   background: white;
   border-top: 1px solid #e0e0e0;
-  border-bottom: 1px solid #e0e0e0;
+  box-shadow: 0 -2px 8px rgba(0, 0, 0, 0.05);
 }
 
-.input-container {
+.input-form {
   display: flex;
-  gap: 12px;
-  padding: 16px;
-  background: white;
+  gap: 0.75rem;
+  margin-bottom: 0.5rem;
 }
 
-.input-container input {
+.input {
   flex: 1;
-  padding: 12px 16px;
-  border: 1px solid #e0e0e0;
+  padding: 0.875rem 1.25rem;
+  border: 2px solid #e0e0e0;
   border-radius: 8px;
-  font-size: 14px;
+  font-size: 1rem;
+  transition: border-color 0.2s;
 }
 
-.input-container button {
-  padding: 12px 24px;
-  background: #1976d2;
+.input:focus {
+  outline: none;
+  border-color: #667eea;
+}
+
+.input:disabled {
+  background: #f5f5f5;
+  cursor: not-allowed;
+}
+
+.submit-btn {
+  padding: 0.875rem 2rem;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
   color: white;
   border: none;
   border-radius: 8px;
+  font-size: 1rem;
+  font-weight: 600;
   cursor: pointer;
-  font-weight: 500;
-  transition: background 0.2s;
+  transition: transform 0.2s, box-shadow 0.2s;
 }
 
-.input-container button:hover {
-  background: #1565c0;
+.submit-btn:hover:not(:disabled) {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+}
+
+.submit-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.hint {
+  margin: 0;
+  text-align: center;
+  font-size: 0.85rem;
+  color: #666;
+}
+
+.hint code {
+  background: #f5f5f5;
+  padding: 0.2rem 0.5rem;
+  border-radius: 4px;
+  font-family: "Courier New", monospace;
 }
 </style>

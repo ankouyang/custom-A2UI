@@ -7,88 +7,112 @@ CONDITIONS OF ANY KIND, either express or implied. See the License for the
 specific language governing permissions and limitations under the License. */
 
 <script setup lang="ts">
-import { watch, provide, computed } from "vue";
-import type { Types } from "@a2ui/lit/0.8";
-import DynamicComponent from "./DynamicComponent.vue";
+import { ref, watch, onMounted, onBeforeUnmount } from "vue";
+import { A2UI } from "./index";
+import "@a2ui/lit/ui"; // 导入 Web Components
 
-const props = defineProps<{
-  surfaceId: Types.SurfaceID;
-  components?: Map<string, Types.AnyComponentNode>;
-  rootId?: string;
-  dataModel?: any;
+// 定义 Props
+const props = withDefaults(
+  defineProps<{
+    surfaceId?: string;
+    messages?: A2UI.Types.ServerToClientMessage[];
+    processor?: A2UI.Types.MessageProcessor;
+    theme?: A2UI.Types.Theme;
+  }>(),
+  {
+    surfaceId: "@default",
+  }
+);
+
+// 定义 Emits
+const emit = defineEmits<{
+  action: [action: A2UI.Types.Action, context: any];
+  "update:messages": [messages: A2UI.Types.ServerToClientMessage[]];
 }>();
 
-const emit = defineEmits(["action"]);
+// 定义 v-model
+const messages = defineModel<A2UI.Types.ServerToClientMessage[]>("messages");
 
-// 使用 computed 来确保响应式更新
-const rootComponent = computed(() => {
-  console.log("Surface.vue: Computing rootComponent:", {
-    hasComponents: !!props.components,
-    componentsSize: props.components?.size || 0,
-    rootId: props.rootId,
-    componentsKeys: props.components ? Array.from(props.components.keys()) : [],
-  });
-  
-  if (props.components && props.rootId) {
-    const found = props.components.get(props.rootId);
-    console.log("Surface.vue: Looking for root component:", {
-      rootId: props.rootId,
-      found: !!found,
-      component: found,
-    });
-    return found || null;
-  } else {
-    console.warn("Surface.vue: Missing components or rootId:", {
-      hasComponents: !!props.components,
-      rootId: props.rootId,
-    });
-    return null;
-  }
-});
+// 创建或使用提供的处理器
+const internalProcessor =
+  props.processor || new A2UI.Data.A2uiMessageProcessor();
+const surfaceElement = ref<HTMLElement | null>(null);
 
-// 监听 props 变化以便调试
+// 监听消息变化，自动处理
 watch(
-  () => [props.components, props.rootId],
-  () => {
-    console.log("Surface.vue: Props changed:", {
-      hasComponents: !!props.components,
-      componentsSize: props.components?.size || 0,
-      rootId: props.rootId,
-      componentsKeys: props.components ? Array.from(props.components.keys()) : [],
-      rootComponentValue: rootComponent.value,
-    });
+  [() => props.messages, messages],
+  ([propsMessages, modelMessages]) => {
+    const msgs = modelMessages || propsMessages;
+    if (msgs && msgs.length > 0) {
+      console.log("[A2UISurface] Processing messages:", msgs);
+      internalProcessor.processMessages(msgs);
+    }
   },
   { immediate: true, deep: true }
 );
 
-// 提供 surface 级别的数据模型
-provide("a2ui-data-model", props.dataModel);
+// 设置 Web Component 的属性
+onMounted(() => {
+  if (!surfaceElement.value) return;
+
+  const surface = surfaceElement.value.querySelector(
+    "a2ui-surface"
+  ) as any;
+  if (!surface) return;
+
+  // 设置处理器
+  surface.processor = internalProcessor;
+  surface.surfaceId = props.surfaceId;
+
+  // 设置主题（如果提供）
+  if (props.theme) {
+    surface.theme = props.theme;
+  }
+
+  // 监听 action 事件
+  const handleAction = (event: CustomEvent) => {
+    console.log("[A2UISurface] Action event:", event.detail);
+    const detail = event.detail;
+    emit("action", detail.action, {
+      surfaceId: props.surfaceId,
+      componentId: detail.sourceComponentId,
+      dataContextPath: detail.dataContextPath,
+    });
+  };
+
+  surface.addEventListener("a2uiaction", handleAction);
+
+  // 清理
+  onBeforeUnmount(() => {
+    surface.removeEventListener("a2uiaction", handleAction);
+  });
+});
+
+// 暴露处理器给父组件（高级用法）
+defineExpose({
+  processor: internalProcessor,
+  getSurfaces: () => internalProcessor.getSurfaces(),
+});
 </script>
 
 <template>
-  <div class="a2ui-surface" :data-surface-id="surfaceId">
-    <DynamicComponent
-      v-if="rootComponent"
-      :surface-id="surfaceId"
-      :component="rootComponent"
-      :components="props.components"
-      @action="(action: any, context: any) => emit('action', action, context)"
-    />
-    <div v-else class="a2ui-empty">
-      No content to display
-    </div>
+  <div ref="surfaceElement" class="a2ui-surface-wrapper">
+    <!-- 直接使用 Lit 的 Web Component -->
+    <a2ui-surface></a2ui-surface>
   </div>
 </template>
 
 <style scoped>
-.a2ui-surface {
+.a2ui-surface-wrapper {
   width: 100%;
   height: 100%;
+  display: block;
 }
 
-.a2ui-empty {
-  padding: 24px;
-  text-align: center;
-  color: #999;
+/* Web Component 会自动渲染内容 */
+a2ui-surface {
+  display: block;
+  width: 100%;
+  height: 100%;
 }
 </style>

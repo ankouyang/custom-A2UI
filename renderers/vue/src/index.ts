@@ -14,13 +14,18 @@
  limitations under the License.
  */
 
-export { componentRegistry, registerComponent } from "./component-registry";
+// 仅导出 Surface 容器组件（Vue 包装）
 export { default as A2UISurface } from "./Surface.vue";
-export { default as DynamicComponent } from "./DynamicComponent.vue";
 
-// 导出标准组件以便自定义
-export { default as Button } from "./components/Button.vue";
-export { default as Text } from "./components/Text.vue";
-
-// 重新导出 A2UI 核心类型和工具
+// 重新导出 Lit 的所有内容供 Vue 用户使用
 export * as A2UI from "@a2ui/lit/0.8";
+
+// 用户可以直接导入 Web Components：
+// import '@a2ui/lit/ui';
+// 
+// 然后在模板中使用：
+// <a2ui-button>, <a2ui-text>, etc.
+//
+// 或使用 A2UISurface 组件（推荐）：
+// <A2UISurface v-model:messages="messages" @action="handleAction" />
+
