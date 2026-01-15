@@ -1,7 +1,6 @@
 import { fileURLToPath, URL } from "node:url";
 import { defineConfig } from "vite";
 import vue from "@vitejs/plugin-vue";
-import { a2aMiddleware } from "./vite-plugins/a2a-middleware";
 
 export default defineConfig({
   plugins: [
@@ -13,7 +12,6 @@ export default defineConfig({
         },
       },
     }),
-    a2aMiddleware(),
   ],
   resolve: {
     alias: {

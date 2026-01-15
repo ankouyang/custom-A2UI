@@ -77,31 +77,45 @@ export const a2aMiddleware = (): Plugin => {
             req.on("end", async () => {
               let sendParams: MessageSendParams;
 
+              // 尝试解析 JSON（可能是 { message: "..." } 格式）
+              let bodyContent = originalBody;
               if (isJson(originalBody)) {
-                console.log(
-                  "[a2a-middleware] Received JSON UI event:",
-                  originalBody
-                );
+                const parsed = JSON.parse(originalBody);
+                // 如果是包装格式 { message: "..." }，提取内容
+                if (parsed.message && typeof parsed.message === 'string') {
+                  bodyContent = parsed.message;
+                  console.log(
+                    "[a2a-middleware] Unwrapped message:",
+                    bodyContent
+                  );
+                } else {
+                  // 否则是 UI 事件对象
+                  console.log(
+                    "[a2a-middleware] Received JSON UI event:",
+                    parsed
+                  );
+                  sendParams = {
+                    message: {
+                      messageId: uuidv4(),
+                      role: "user",
+                      parts: [
+                        {
+                          kind: "data",
+                          data: parsed,
+                          metadata: { mimeType: A2UI_MIME_TYPE },
+                        } as Part,
+                      ],
+                      kind: "message",
+                    },
+                  };
+                }
+              }
 
-                const clientEvent = JSON.parse(originalBody);
-                sendParams = {
-                  message: {
-                    messageId: uuidv4(),
-                    role: "user",
-                    parts: [
-                      {
-                        kind: "data",
-                        data: clientEvent,
-                        metadata: { mimeType: A2UI_MIME_TYPE },
-                      } as Part,
-                    ],
-                    kind: "message",
-                  },
-                };
-              } else {
+              // 如果还没有设置 sendParams，说明是文本消息
+              if (!sendParams) {
                 console.log(
                   "[a2a-middleware] Received text query:",
-                  originalBody
+                  bodyContent
                 );
                 sendParams = {
                   message: {
@@ -110,7 +124,7 @@ export const a2aMiddleware = (): Plugin => {
                     parts: [
                       {
                         kind: "text",
-                        text: originalBody,
+                        text: bodyContent,
                       },
                     ],
                     kind: "message",

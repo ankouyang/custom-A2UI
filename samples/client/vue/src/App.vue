@@ -1,18 +1,26 @@
 /* Copyright 2025 Google LLC Licensed under the Apache License, Version 2.0 */
 
 <script setup lang="ts">
-import { ref, computed } from "vue";
+import { ref, computed, onMounted } from "vue";
 import { A2UISurface, A2UI } from "@a2ui/vue";
+import { A2UIClient } from "./client";
+
+// A2A Client
+const client = new A2UIClient();
 
 // State
 const userInput = ref("");
-const chatMessages = ref<Array<{ role: "user" | "agent"; content: string }>>([]);
 const a2uiMessages = ref<A2UI.Types.ServerToClientMessage[]>([]);
 const loading = ref(false);
 const error = ref<string | null>(null);
 
 // Computed
-const hasMessages = computed(() => chatMessages.value.length > 0);
+const hasMessages = computed(() => a2uiMessages.value.length > 0);
+
+// 初始化
+onMounted(async () => {
+  await client.ready;
+});
 
 // 处理用户输入
 async function handleSubmit() {
@@ -21,89 +29,46 @@ async function handleSubmit() {
   const message = userInput.value.trim();
   userInput.value = "";
   error.value = null;
-
-  chatMessages.value.push({ role: "user", content: message });
   loading.value = true;
 
   try {
-    const response = await fetch("/a2a/invoke", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message }),
-    });
+    console.log("[App] Sending message:", message);
+    
+    const newMessages = await client.send(message);
+    console.log("[App] Received messages:", newMessages);
 
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-    }
-
-    const parts = await response.json();
-    console.log("[App] Received response:", parts);
-
-    // 提取 A2UI 消息
-    const newA2UIMessages = extractA2UIMessages(parts);
-    if (newA2UIMessages.length > 0) {
-      a2uiMessages.value = [...a2uiMessages.value, ...newA2UIMessages];
-    }
-
-    // 提取文本消息
-    const textParts = parts.filter((p: any) => p.kind === "text");
-    if (textParts.length > 0) {
-      const agentText = textParts.map((p: any) => p.text).join("\n");
-      chatMessages.value.push({ role: "agent", content: agentText });
-    }
+    // 完全匹配Lit：清空旧消息，只显示新响应
+    a2uiMessages.value = newMessages;
   } catch (err: any) {
     console.error("[App] Error:", err);
     error.value = err.message || "Failed to send message";
-    chatMessages.value.push({
-      role: "agent",
-      content: `Error: ${error.value}`,
-    });
   } finally {
     loading.value = false;
   }
 }
 
-// 从 parts 中提取 A2UI 消息
-function extractA2UIMessages(
-  parts: any[]
-): A2UI.Types.ServerToClientMessage[] {
-  const messages: A2UI.Types.ServerToClientMessage[] = [];
-
-  for (const part of parts) {
-    if (part.kind === "data" && part.data) {
-      const isA2UI =
-        part.metadata?.mimeType === "application/json+a2ui" ||
-        part.data.beginRendering ||
-        part.data.surfaceUpdate ||
-        part.data.dataModelUpdate;
-
-      if (isA2UI) {
-        if (part.data.beginRendering) {
-          messages.push({ beginRendering: part.data.beginRendering });
-        }
-        if (part.data.surfaceUpdate) {
-          messages.push({ surfaceUpdate: part.data.surfaceUpdate });
-        }
-        if (part.data.dataModelUpdate) {
-          messages.push({ dataModelUpdate: part.data.dataModelUpdate });
-        }
-      }
-    }
-  }
-
-  return messages;
-}
-
 // 处理 A2UI 用户操作
-function handleAction(action: A2UI.Types.Action, context: any) {
-  console.log("[App] User action:", action, context);
-  chatMessages.value.push({ role: "user", content: `Action: ${action.name}` });
-  // TODO: 将操作发送回 Agent
+async function handleAction(event: CustomEvent) {
+  const action = event.detail as A2UI.Types.A2UIClientEventMessage;
+  console.log("[App] User action:", action);
+  
+  loading.value = true;
+  try {
+    const newMessages = await client.send(action);
+    console.log("[App] Received messages after action:", newMessages);
+    
+    // 完全匹配Lit：替换而不是累积
+    a2uiMessages.value = newMessages;
+  } catch (err: any) {
+    console.error("[App] Error sending action:", err);
+    error.value = err.message || "Failed to send action";
+  } finally {
+    loading.value = false;
+  }
 }
 
 // 清空聊天
 function clearChat() {
-  chatMessages.value = [];
   a2uiMessages.value = [];
   error.value = null;
 }
@@ -120,38 +85,31 @@ function clearChat() {
     </header>
 
     <main class="main">
-      <!-- A2UI Surface (使用 Web Components 渲染) -->
-      <div class="surface-container">
+      <!-- Loading state -->
+      <div v-if="loading && !hasMessages" class="pending">
+        <div class="spinner"></div>
+        <div class="loading-text">Awaiting an answer...</div>
+      </div>
+
+      <!-- A2UI Surface -->
+      <div v-else-if="hasMessages" class="surface-container">
         <A2UISurface
           v-model:messages="a2uiMessages"
           surface-id="default"
-          @action="handleAction"
+          @a2uiaction="handleAction"
         />
       </div>
 
-      <!-- 聊天历史 -->
-      <div v-if="hasMessages" class="chat-history">
-        <h3>Chat History</h3>
-        <div
-          v-for="(msg, idx) in chatMessages"
-          :key="idx"
-          :class="['message', msg.role]"
-        >
-          <strong>{{ msg.role === "user" ? "You" : "Agent" }}:</strong>
-          <span>{{ msg.content }}</span>
-        </div>
-      </div>
-
-      <!-- 错误提示 -->
+      <!-- Error message -->
       <div v-if="error" class="error">⚠️ {{ error }}</div>
     </main>
 
-    <footer class="footer">
+    <footer class="footer" v-if="!hasMessages">
       <form @submit.prevent="handleSubmit" class="input-form">
         <input
           v-model="userInput"
           type="text"
-          placeholder="Type your message..."
+          placeholder="Book a table for 2..."
           :disabled="loading"
           class="input"
         />
@@ -160,13 +118,9 @@ function clearChat() {
           :disabled="loading || !userInput.trim()"
           class="submit-btn"
         >
-          {{ loading ? "Sending..." : "Send" }}
+          <span class="icon">send</span>
         </button>
       </form>
-      <p class="hint">
-        💡 This demo uses <code>&lt;a2ui-surface&gt;</code> Web Component
-        directly
-      </p>
     </footer>
   </div>
 </template>
@@ -176,29 +130,33 @@ function clearChat() {
   display: flex;
   flex-direction: column;
   height: 100vh;
-  max-width: 1200px;
+  max-width: 640px;
   margin: 0 auto;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-family: var(--font-family, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif);
+  background: var(--background);
 }
 
 .header {
-  padding: 1.5rem;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  color: white;
+  padding: 2rem 1.5rem;
   text-align: center;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
   position: relative;
 }
 
 .header h1 {
-  margin: 0;
+  margin: 0 0 0.5rem;
   font-size: 2rem;
+  font-weight: 700;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
 }
 
 .subtitle {
-  margin: 0.5rem 0 0;
-  opacity: 0.9;
+  margin: 0;
+  opacity: 0.7;
   font-size: 0.9rem;
+  color: #666;
 }
 
 .clear-btn {
@@ -206,79 +164,60 @@ function clearChat() {
   top: 1.5rem;
   right: 1.5rem;
   padding: 0.5rem 1rem;
-  background: rgba(255, 255, 255, 0.2);
-  border: 1px solid rgba(255, 255, 255, 0.3);
-  color: white;
+  background: #f5f5f5;
+  border: 1px solid #e0e0e0;
+  color: #333;
   border-radius: 6px;
   cursor: pointer;
-  font-size: 0.9rem;
+  font-size: 0.85rem;
   transition: all 0.2s;
 }
 
 .clear-btn:hover {
-  background: rgba(255, 255, 255, 0.3);
+  background: #e8e8e8;
 }
 
 .main {
   flex: 1;
   overflow-y: auto;
-  padding: 1.5rem;
-  background: #f5f5f5;
+  padding: 0 1.5rem 1.5rem;
+}
+
+.pending {
+  width: 100%;
+  min-height: 200px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  animation: fadeIn 1s cubic-bezier(0, 0, 0.3, 1) 0.3s backwards;
+}
+
+.spinner {
+  width: 48px;
+  height: 48px;
+  border: 4px solid rgba(102, 126, 234, 0.1);
+  border-left-color: #667eea;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+.loading-text {
+  color: #666;
+  font-size: 0.95rem;
 }
 
 .surface-container {
-  background: white;
-  border-radius: 12px;
-  padding: 1.5rem;
-  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08);
-  margin-bottom: 1.5rem;
-  min-height: 300px;
-}
-
-.chat-history {
-  background: white;
-  border-radius: 12px;
-  padding: 1.5rem;
-  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08);
-}
-
-.chat-history h3 {
-  margin: 0 0 1rem;
-  color: #333;
-  font-size: 1.1rem;
-}
-
-.message {
-  padding: 0.75rem 1rem;
-  margin-bottom: 0.75rem;
-  border-radius: 8px;
-  line-height: 1.5;
-}
-
-.message.user {
-  background: #e3f2fd;
-  border-left: 3px solid #2196f3;
-}
-
-.message.agent {
-  background: #f3e5f5;
-  border-left: 3px solid #9c27b0;
-}
-
-.message strong {
-  display: block;
-  margin-bottom: 0.25rem;
-  font-size: 0.85rem;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
+  animation: fadeIn 0.5s ease-in-out;
 }
 
 .error {
   background: #ffebee;
   color: #c62828;
+  border: 1px solid #ef9a9a;
   padding: 1rem;
   border-radius: 8px;
-  border-left: 3px solid #c62828;
   margin-top: 1rem;
 }
 
@@ -286,21 +225,21 @@ function clearChat() {
   padding: 1.5rem;
   background: white;
   border-top: 1px solid #e0e0e0;
-  box-shadow: 0 -2px 8px rgba(0, 0, 0, 0.05);
 }
 
 .input-form {
   display: flex;
-  gap: 0.75rem;
-  margin-bottom: 0.5rem;
+  gap: 0.5rem;
 }
 
 .input {
   flex: 1;
-  padding: 0.875rem 1.25rem;
+  padding: 1rem 1.25rem;
   border: 2px solid #e0e0e0;
   border-radius: 8px;
   font-size: 1rem;
+  background: white;
+  color: #333;
   transition: border-color 0.2s;
 }
 
@@ -310,44 +249,51 @@ function clearChat() {
 }
 
 .input:disabled {
-  background: #f5f5f5;
+  opacity: 0.5;
   cursor: not-allowed;
 }
 
 .submit-btn {
-  padding: 0.875rem 2rem;
+  padding: 1rem 1.5rem;
   background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
   color: white;
   border: none;
   border-radius: 8px;
-  font-size: 1rem;
-  font-weight: 600;
   cursor: pointer;
-  transition: transform 0.2s, box-shadow 0.2s;
+  transition: transform 0.2s, opacity 0.2s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 60px;
+}
+
+.submit-btn .icon {
+  font-family: "Material Symbols Outlined";
+  font-size: 24px;
 }
 
 .submit-btn:hover:not(:disabled) {
-  transform: translateY(-2px);
-  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+  transform: scale(1.05);
 }
 
 .submit-btn:disabled {
-  opacity: 0.6;
+  opacity: 0.5;
   cursor: not-allowed;
   transform: none;
 }
 
-.hint {
-  margin: 0;
-  text-align: center;
-  font-size: 0.85rem;
-  color: #666;
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
-.hint code {
-  background: #f5f5f5;
-  padding: 0.2rem 0.5rem;
-  border-radius: 4px;
-  font-family: "Courier New", monospace;
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }
 </style>
